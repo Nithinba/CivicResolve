@@ -1,12 +1,13 @@
 """
 CivicResolve FastAPI main entrypoint.
-Configures CORS, static uploads mounting, database initialization, default seeding, and routers.
+Unified production server: serves the REST APIs, uploaded evidence images,
+and the built React Single Page Application (SPA).
 """
 
-import os
 from pathlib import Path
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.auth import hash_password
@@ -17,7 +18,8 @@ from app.routes import admin, analytics, auth, complaints, departments
 
 # Ensure database tables exist immediately on startup
 Base.metadata.create_all(bind=engine)
-Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
+upload_dir_path = Path(settings.UPLOAD_DIR)
+upload_dir_path.mkdir(parents=True, exist_ok=True)
 
 
 def seed_initial_data():
@@ -69,7 +71,7 @@ def seed_initial_data():
             )
 
         db.commit()
-    except Exception as e:
+    except Exception:
         db.rollback()
     finally:
         db.close()
@@ -82,7 +84,7 @@ except Exception:
     pass
 
 app = FastAPI(
-    title="CivicResolve API",
+    title="CivicResolve Platform",
     description="AI-Powered Citizen Grievance Management and Resolution Platform API",
     version="1.0.0",
 )
@@ -97,8 +99,6 @@ app.add_middleware(
 )
 
 # Mount uploaded files directory for public viewing of issue/resolution images
-upload_dir_path = Path(settings.UPLOAD_DIR)
-upload_dir_path.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(upload_dir_path)), name="uploads")
 
 # Include Routers with /api prefix
@@ -109,12 +109,45 @@ app.include_router(admin.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
 
 
-@app.get("/")
+@app.get("/api/health")
 def health_check():
-    """Root health check."""
+    """Root health check for APIs."""
     return {
         "status": "healthy",
-        "service": "CivicResolve API",
+        "service": "CivicResolve Platform",
         "version": "1.0.0",
         "gemini_ai": "active" if bool(settings.GEMINI_API_KEY) else "fallback_mode",
     }
+
+
+# Frontend SPA mounting
+frontend_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+
+if frontend_dist.exists():
+    assets_dir = frontend_dist / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    @app.get("/{full_path:path}")
+    def serve_frontend_spa(full_path: str):
+        # Do not catch /api or /uploads requests that were not matched
+        if full_path.startswith("api/") or full_path.startswith("uploads/"):
+            raise HTTPException(status_code=404, detail="API route not found")
+
+        target_file = frontend_dist / full_path
+        if full_path and target_file.exists() and target_file.is_file():
+            return FileResponse(str(target_file))
+
+        index_file = frontend_dist / "index.html"
+        if index_file.exists():
+            return FileResponse(str(index_file))
+
+        return {"message": "CivicResolve API Online. Frontend dist not found."}
+else:
+    @app.get("/")
+    def index_root():
+        return {
+            "status": "healthy",
+            "service": "CivicResolve API",
+            "message": "API is operational. Build frontend to view unified portal.",
+        }

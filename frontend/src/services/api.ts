@@ -12,10 +12,12 @@ import {
   User,
 } from '../types';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const envUrl = import.meta.env.VITE_API_URL;
+// Use relative path '/api' if hosted on same origin or VITE_API_URL is empty
+const API_BASE_URL = envUrl && envUrl.trim() !== '' ? `${envUrl}/api` : '/api';
 
 const api = axios.create({
-  baseURL: `${API_BASE_URL}/api`,
+  baseURL: API_BASE_URL,
 });
 
 // Interceptor to attach JWT token
